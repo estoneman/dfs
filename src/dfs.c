@@ -36,7 +36,7 @@ int main(int argc, char *argv[]) {
   }
 
   strncpy(dfs_dir, argv[1], PATH_MAX);
-  if (stat(dfs_dir, &st) == -1) {  // path does not exist already
+  if (stat(dfs_dir, &st) == -1) {      // path does not exist already
     if (mkdir(dfs_dir, 0744) == -1) {  // try to create
       perror("mkdir");
 
@@ -67,7 +67,8 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
-  fprintf(stderr, "[%s] dfs listening on %d -> 0.0.0.0:%s, working directory = %s\n",
+  fprintf(stderr,
+          "[%s] dfs listening on %d -> 0.0.0.0:%s, working directory = %s\n",
           __func__, listenfd, port, dfs_dir);
 
   cliaddr_len = sizeof(cliaddr);
@@ -88,7 +89,6 @@ int main(int argc, char *argv[]) {
       perror("pthread_create");
       exit(EXIT_FAILURE);
     }
-
   }
 
   return EXIT_SUCCESS;

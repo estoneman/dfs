@@ -40,7 +40,8 @@ void *async_dfs_write(void *arg) {
 
   pthread_mutex_lock(&f_buf->mutex);
 
-  if ((bytes_written = write(f_buf->fd, f_buf->data, f_buf->len_data)) != f_buf->len_data) {
+  if ((bytes_written = write(f_buf->fd, f_buf->data, f_buf->len_data)) !=
+      f_buf->len_data) {
     if (errno == EFAULT) {
       fprintf(stderr, "[ERROR] incomplete/failed write: %s\n", strerror(errno));
     } else {
@@ -53,7 +54,8 @@ void *async_dfs_write(void *arg) {
   }
 
 #ifdef DEBUG
-  fprintf(stderr, "[%s] wrote %zd bytes (fd=%d)\n", __func__, bytes_written, f_buf->fd);
+  fprintf(stderr, "[%s] wrote %zd bytes (fd=%d)\n", __func__, bytes_written,
+          f_buf->fd);
 #endif
 
   pthread_mutex_unlock(&f_buf->mutex);
@@ -124,10 +126,13 @@ void *cxn_handle(void *arg) {
     pthread_mutex_lock(&f_bufs[n_fbufs]->mutex);
 
     f_bufs[n_fbufs]->fname = fname;
-    f_bufs[n_fbufs]->data = sk_buf->data + data_offset;  // include local offset in file data
+    f_bufs[n_fbufs]->data =
+        sk_buf->data + data_offset;  // include local offset in file data
     f_bufs[n_fbufs]->len_data = dfc_hdr.offset;
 
-    if ((f_bufs[n_fbufs]->fd = open(f_bufs[n_fbufs]->fname, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR)) == -1) {
+    if ((f_bufs[n_fbufs]->fd =
+             open(f_bufs[n_fbufs]->fname, O_WRONLY | O_CREAT | O_TRUNC,
+                  S_IRUSR | S_IWUSR)) == -1) {
       perror("open");
 
       return NULL;
@@ -138,7 +143,9 @@ void *cxn_handle(void *arg) {
     pthread_mutex_unlock(&f_bufs[n_fbufs]->mutex);
 
     // async file write
-    if (pthread_create(&write_tids[cur_write_tid], &write_tid_attrs[cur_write_tid], async_dfs_write, &f_bufs[n_fbufs]) < 0) {
+    if (pthread_create(&write_tids[cur_write_tid],
+                       &write_tid_attrs[cur_write_tid], async_dfs_write,
+                       &f_bufs[n_fbufs]) < 0) {
       fprintf(stderr, "[ERROR] could not create thread\n");
       exit(EXIT_FAILURE);
     }
@@ -148,8 +155,9 @@ void *cxn_handle(void *arg) {
 
     if (n_fbufs >= total_fbufs) {
       total_fbufs *= 2;
-      
-      if ((f_bufs = realloc(f_bufs, total_fbufs * sizeof(FileBuffer *))) == NULL) {
+
+      if ((f_bufs = realloc(f_bufs, total_fbufs * sizeof(FileBuffer *))) ==
+          NULL) {
         fprintf(stderr, "[FATAL] out of memory\n");
         free(f_bufs);
         exit(EXIT_FAILURE);
@@ -159,7 +167,7 @@ void *cxn_handle(void *arg) {
     // if surpassed thread pool depth, check for joinable threads
     if (cur_write_tid >= SZ_THREAD_POOL) {
       for (size_t i = 0; i < SZ_THREAD_POOL; ++i) {
-        pthread_attr_getdetachstate(&write_tid_attrs[i], &detach_state); 
+        pthread_attr_getdetachstate(&write_tid_attrs[i], &detach_state);
         if (detach_state == PTHREAD_CREATE_JOINABLE) {
           fprintf(stderr, "[INFO] joining completed thread %zu\n", i);
           pthread_join(write_tids[i], NULL);

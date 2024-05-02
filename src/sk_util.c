@@ -4,8 +4,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include "dfs/dfs_util.h"
@@ -27,8 +27,7 @@ char *dfs_recv(int sockfd, ssize_t *nb_recv) {
   bytes_alloced = RCVCHUNK;
 
   total_nb_recv = realloc_sz = num_reallocs = 0;
-  while ((*nb_recv = recv(sockfd, recv_buf + total_nb_recv, RCVCHUNK, 0)) >
-         0) {
+  while ((*nb_recv = recv(sockfd, recv_buf + total_nb_recv, RCVCHUNK, 0)) > 0) {
     total_nb_recv += *nb_recv;
 
     if (total_nb_recv + RCVCHUNK >= bytes_alloced) {
@@ -147,7 +146,8 @@ void set_timeout(int sockfd, long tv_sec, long tv_usec) {
   rcvtimeo.tv_usec = tv_usec;
   if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo)) <
       0) {
-    fprintf(stderr, "[%s] could not setsockopt on socket %d\n", __func__, sockfd);
+    fprintf(stderr, "[%s] could not setsockopt on socket %d\n", __func__,
+            sockfd);
     perror("setsockopt");
     close(sockfd);
     exit(EXIT_FAILURE);
