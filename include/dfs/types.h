@@ -7,13 +7,6 @@
 
 typedef struct {
   int sockfd;
-  char *data;
-  ssize_t len_data;
-  pthread_mutex_t mutex;
-} SocketBuffer;
-
-typedef struct {
-  int sockfd;
   char *dfs_dir;
 } DFSHandle;
 
@@ -23,5 +16,19 @@ typedef struct {
   size_t offset;
 } DFCHeader;
 #define DFC_HDRSZ sizeof(DFCHeader)
+
+typedef struct {
+  int fd;
+  char *data;
+  ssize_t len_data;
+  pthread_mutex_t mutex;
+} FileBuffer;
+
+typedef struct {
+  int sockfd;
+  char *data;
+  ssize_t len_data;
+  pthread_mutex_t mutex;
+} SocketBuffer;
 
 #endif  // TYPES_H_
