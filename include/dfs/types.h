@@ -18,6 +18,7 @@ typedef struct {
 #define DFC_HDRSZ sizeof(DFCHeader)
 
 typedef struct {
+  const char *fname;
   int fd;
   char *data;
   ssize_t len_data;

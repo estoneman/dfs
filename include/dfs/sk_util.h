@@ -3,8 +3,8 @@
 
 #include <netinet/in.h>
 
-#define RCVTIMEO_USEC (10 * 1000)
-#define RCVTIMEO_SEC 0
+#define RCVTIMEO_USEC 0
+#define RCVTIMEO_SEC 5
 #define RCVCHUNK 4096
 
 char *alloc_buf(size_t);

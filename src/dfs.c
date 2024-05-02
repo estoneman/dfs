@@ -67,8 +67,8 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
-  fprintf(stderr, "[%s] dfs listening on 0.0.0.0:%s, working directory = %s\n",
-          __func__, port, dfs_dir);
+  fprintf(stderr, "[%s] dfs listening on %d -> 0.0.0.0:%s, working directory = %s\n",
+          __func__, listenfd, port, dfs_dir);
 
   cliaddr_len = sizeof(cliaddr);
 
