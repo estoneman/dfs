@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "dfs/dfs_util.h"
 
@@ -35,4 +36,37 @@ char *realloc_buf(char *buf, size_t size) {
   buf = tmp_buf;
 
   return buf;
+}
+
+size_t strip_hdr(char *buf, DFCHeader *dfc_hdr) {
+  size_t len_hdr;
+
+  strncpy(dfc_hdr->cmd, buf, strlen(buf) + 1);
+  len_hdr = strlen(buf) + 1;
+
+  strncpy(dfc_hdr->fname, buf + len_hdr, strlen(buf + len_hdr) + 1);
+  len_hdr += strlen(buf + len_hdr) + 1;
+
+  memcpy(&dfc_hdr->offset, buf + len_hdr, sizeof(size_t));
+  len_hdr += sizeof(size_t);
+
+  return len_hdr;
+}
+
+size_t strnins(char *dst, const char *src, size_t n) {
+  size_t src_len, dst_len;
+
+  src_len = strlen(src) + 1;
+  dst_len = strlen(dst) + 1;
+
+  if (n > src_len) {
+    n = src_len;
+  }
+
+  char tmp[dst_len + n + 1];
+  strncpy(tmp, dst, dst_len);
+  strncpy(dst, src, src_len);
+  strncpy(dst + src_len - 1, tmp, dst_len);
+
+  return n;
 }

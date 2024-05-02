@@ -8,9 +8,11 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#include "dfs/dfs.h"
+#include "dfs/types.h"
+#include "dfs/dfs_util.h"
 #include "dfs/sk_util.h"
 #include "dfs/async.h"
+#include "dfs/dfs.h"
 
 void usage(const char *program) {
   fprintf(stderr, "usage: %s <working-directory> <port (1024-65535)>\n",
@@ -18,12 +20,13 @@ void usage(const char *program) {
 }
 
 int main(int argc, char *argv[]) {
-  int listenfd, *connfd;
+  int listenfd;
   char port[PORT_MAX + 1], dfs_dir[PATH_MAX + 1], ipstr[INET6_ADDRSTRLEN];
   struct stat st;
   struct sockaddr_in cliaddr;
   socklen_t cliaddr_len;
   pthread_t cxn_tid;
+  DFSHandle dfs_handle;
 
   if (argc < 3) {
     fprintf(stderr, "[ERROR] not enough arguments supplied\n");
@@ -40,6 +43,11 @@ int main(int argc, char *argv[]) {
       return EXIT_FAILURE;
     }
   }
+
+  if (dfs_dir[strlen(dfs_dir) - 1] != '/')
+    dfs_handle.dfs_dir = strncat(dfs_dir, "/", sizeof(char) + 1);
+  else
+    dfs_handle.dfs_dir = dfs_dir;
 
   strncpy(port, argv[2], PORT_MAX);
   if (!is_valid_port(port)) {
@@ -64,15 +72,9 @@ int main(int argc, char *argv[]) {
 
   cliaddr_len = sizeof(cliaddr);
 
-  if ((connfd = (int *)malloc(sizeof(int))) == NULL) {
-    fprintf(stderr, "[ERROR] out of memory\n");
-
-    exit(EXIT_FAILURE);
-  }
-
   while (1) {
     fprintf(stderr, "[%s] waiting for connections... \n", __func__);
-    if ((*connfd =
+    if ((dfs_handle.sockfd =
              accept(listenfd, (struct sockaddr *)&cliaddr, &cliaddr_len)) < 0) {
       perror("accept");
       continue;
@@ -80,15 +82,14 @@ int main(int argc, char *argv[]) {
 
     get_ipstr(ipstr, (struct sockaddr *)&cliaddr);
     fprintf(stderr, "[%s] socket %d: new connection (%s:%d)\n", __func__,
-            *connfd, ipstr, ntohs(cliaddr.sin_port));
+            dfs_handle.sockfd, ipstr, ntohs(cliaddr.sin_port));
 
-    if (pthread_create(&cxn_tid, NULL, cxn_handle, connfd) != 0) {
+    if (pthread_create(&cxn_tid, NULL, cxn_handle, &dfs_handle) != 0) {
       perror("pthread_create");
       exit(EXIT_FAILURE);
     }
-  }
 
-  free(connfd);
+  }
 
   return EXIT_SUCCESS;
 }

@@ -147,6 +147,7 @@ void set_timeout(int sockfd, long tv_sec, long tv_usec) {
   rcvtimeo.tv_usec = tv_usec;
   if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo)) <
       0) {
+    fprintf(stderr, "[%s] could not setsockopt on socket %d\n", __func__, sockfd);
     perror("setsockopt");
     close(sockfd);
     exit(EXIT_FAILURE);

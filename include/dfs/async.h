@@ -1,12 +1,9 @@
 #ifndef ASYNC_H_
 #define ASYNC_H_
 
-typedef struct {
-  int sockfd;
-  char *data;
-  ssize_t len_data;
-} SocketBuffer;
-
+void *async_dfs_recv(void *);
 void *cxn_handle(void *);
+
+void print_header(DFCHeader *);
 
 #endif  // ASYNC_H_
