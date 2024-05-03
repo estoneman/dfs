@@ -144,12 +144,16 @@ void set_timeout(int sockfd, long tv_sec, long tv_usec) {
 
   rcvtimeo.tv_sec = tv_sec;
   rcvtimeo.tv_usec = tv_usec;
+
   if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, sizeof(rcvtimeo)) <
       0) {
-    fprintf(stderr, "[%s] could not setsockopt on socket %d\n", __func__,
-            sockfd);
-    perror("setsockopt");
-    close(sockfd);
+    fprintf(stderr, "[%s] setsockopt(sfd=%d) error: %s\n", __func__,
+            sockfd, strerror(errno));
+
+    if (close(sockfd) == -1) {
+      fprintf(stderr, "[%s] close(sfd=%d) error: %s\n", __func__, sockfd, strerror(errno));
+    }
+
     exit(EXIT_FAILURE);
   }
 }
