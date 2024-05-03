@@ -25,8 +25,6 @@ int main(int argc, char *argv[]) {
   struct stat st;
   struct sockaddr_in cliaddr;
   socklen_t cliaddr_len;
-  pthread_t cxn_tid;
-  DFSHandle dfs_handle;
 
   if (argc < 3) {
     fprintf(stderr, "[ERROR] not enough arguments supplied\n");
@@ -43,11 +41,6 @@ int main(int argc, char *argv[]) {
       return EXIT_FAILURE;
     }
   }
-
-  if (dfs_dir[strlen(dfs_dir) - 1] != '/')
-    dfs_handle.dfs_dir = strncat(dfs_dir, "/", sizeof(char) + 1);
-  else
-    dfs_handle.dfs_dir = dfs_dir;
 
   strncpy(port, argv[2], PORT_MAX);
   if (!is_valid_port(port)) {
@@ -73,9 +66,14 @@ int main(int argc, char *argv[]) {
 
   cliaddr_len = sizeof(cliaddr);
 
+  DFSHandle *dfs_handle;
   while (1) {
+    int connfd;
+    pthread_t cxn_tid;
+
     fprintf(stderr, "[%s] waiting for connections... \n", __func__);
-    if ((dfs_handle.sockfd =
+
+    if ((connfd =
              accept(listenfd, (struct sockaddr *)&cliaddr, &cliaddr_len)) < 0) {
       perror("accept");
       continue;
@@ -83,12 +81,31 @@ int main(int argc, char *argv[]) {
 
     get_ipstr(ipstr, (struct sockaddr *)&cliaddr);
     fprintf(stderr, "[%s] socket %d: new connection (%s:%d)\n", __func__,
-            dfs_handle.sockfd, ipstr, ntohs(cliaddr.sin_port));
+            connfd, ipstr, ntohs(cliaddr.sin_port));
 
+    if ((dfs_handle = malloc(sizeof(DFSHandle))) == NULL) {
+      fprintf(stderr, "[FATAL] out of memory\n");
+      exit(EXIT_FAILURE);
+    }
+
+    if (dfs_dir[strlen(dfs_dir) - 1] != '/')
+      dfs_handle->dfs_dir = strncat(dfs_dir, "/", sizeof(char) + 1);
+    else
+      dfs_handle->dfs_dir = dfs_dir;
+
+    dfs_handle->sockfd = connfd;
+
+    fprintf(stderr, "[%s] SELECTED SOCKFD = %d\n", __func__, dfs_handle->sockfd);
     if (pthread_create(&cxn_tid, NULL, cxn_handle, &dfs_handle) != 0) {
       perror("pthread_create");
       exit(EXIT_FAILURE);
     }
+
+    pthread_detach(cxn_tid);
+  }
+
+  if (dfs_handle != NULL) {
+    free(dfs_handle);
   }
 
   return EXIT_SUCCESS;
