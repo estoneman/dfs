@@ -8,6 +8,7 @@
 typedef struct {
   int sockfd;
   char *dfs_dir;
+  pthread_mutex_t mutex;
 } DFSHandle;
 
 typedef struct {
