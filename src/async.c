@@ -19,17 +19,14 @@
 void *async_dfs_recv(void *arg) {
   SocketBuffer *sk_buf = *(SocketBuffer **)arg;
 
-  pthread_mutex_lock(&sk_buf->mutex);
   if ((sk_buf->data = dfs_recv(sk_buf->sockfd, &(sk_buf->len_data))) == NULL) {
     return NULL;
   }
 
 #ifdef DEBUG
-  fprintf(stderr, "[%s] received %zd bytes\n", __func__, sk_buf->len_data);
+  fprintf(stderr, "[%s] received %zd bytes over socket %d\n", __func__, sk_buf->len_data, sk_buf->sockfd);
   fflush(stderr);
 #endif
-
-  pthread_mutex_unlock(&sk_buf->mutex);
 
   return NULL;
 }
@@ -37,8 +34,6 @@ void *async_dfs_recv(void *arg) {
 void *async_dfs_write(void *arg) {
   FileBuffer *f_buf = *(FileBuffer **)arg;
   ssize_t bytes_written;
-
-  pthread_mutex_lock(&f_buf->mutex);
 
   if ((bytes_written = write(f_buf->fd, f_buf->data, f_buf->len_data)) !=
       f_buf->len_data) {
@@ -48,9 +43,7 @@ void *async_dfs_write(void *arg) {
       perror("write");
     }
 
-    if (close(f_buf->fd) == -1) {
-      perror("close");
-    }
+    fprintf(stderr, "[%s] close(fd=%d) success\n", __func__, f_buf->fd);
   }
 
 #ifdef DEBUG
@@ -58,13 +51,11 @@ void *async_dfs_write(void *arg) {
           f_buf->fd);
 #endif
 
-  pthread_mutex_unlock(&f_buf->mutex);
-
   return NULL;
 }
 
 void *cxn_handle(void *arg) {
-  DFSHandle *dfs_handle = (DFSHandle *)arg;
+  DFSHandle *dfs_handle = *(DFSHandle **)arg;
   SocketBuffer *sk_buf;
   DFCHeader dfc_hdr;
   FileBuffer **f_bufs;
@@ -76,6 +67,7 @@ void *cxn_handle(void *arg) {
   size_t n_fbufs, total_fbufs;
 
   char fname[PATH_MAX + 1];
+  char dfs_dir[PATH_MAX + 1];
 
   int detach_state;
 
@@ -84,8 +76,10 @@ void *cxn_handle(void *arg) {
     exit(EXIT_FAILURE);
   }
 
-  pthread_mutex_init(&sk_buf->mutex, NULL);
   sk_buf->sockfd = dfs_handle->sockfd;
+  fprintf(stderr, "[%s] SELECTED SOCKFD = %d\n", __func__, sk_buf->sockfd);
+  strncpy(dfs_dir, dfs_handle->dfs_dir, PATH_MAX);
+
   if (pthread_create(&recv_tid, NULL, async_dfs_recv, &sk_buf) < 0) {
     fprintf(stderr, "[ERROR] could not create thread\n");
     exit(EXIT_FAILURE);
@@ -108,6 +102,15 @@ void *cxn_handle(void *arg) {
 
   pthread_join(recv_tid, NULL);
 
+  // close SocketBuffer
+  if (close(sk_buf->sockfd) == -1) {
+    fprintf(stderr, "[%s] close(sfd=%d): %s\n", __func__, sk_buf->sockfd, strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+
+  fprintf(stderr, "[%s] close(sfd=%d) success\n", __func__, sk_buf->sockfd);
+
+
   while (data_offset < (size_t)sk_buf->len_data) {
     // extract header
     data_offset += strip_hdr(sk_buf->data + data_offset, &dfc_hdr);
@@ -117,17 +120,20 @@ void *cxn_handle(void *arg) {
       exit(EXIT_FAILURE);
     }
 
-    pthread_mutex_init(&f_bufs[n_fbufs]->mutex, NULL);
-
     strncpy(fname, basename(dfc_hdr.fname), PATH_MAX);
-    strnins(fname, dfs_handle->dfs_dir, PATH_MAX);
+    strnins(fname, dfs_dir, PATH_MAX);
 
     // update f_buf
-    pthread_mutex_lock(&f_bufs[n_fbufs]->mutex);
-
     f_bufs[n_fbufs]->fname = fname;
-    f_bufs[n_fbufs]->data =
-        sk_buf->data + data_offset;  // include local offset in file data
+
+    // f_bufs[n_fbufs]->data =
+    //     sk_buf->data + data_offset;  // include local offset in file data
+    if ((f_bufs[n_fbufs]->data = alloc_buf(dfc_hdr.offset)) == NULL) {
+      fprintf(stderr, "[FATAL] out of memory\n");
+      exit(EXIT_FAILURE);
+    }
+
+    memcpy(f_bufs[n_fbufs]->data, sk_buf->data + data_offset, dfc_hdr.offset);
     f_bufs[n_fbufs]->len_data = dfc_hdr.offset;
 
     if ((f_bufs[n_fbufs]->fd =
@@ -140,9 +146,9 @@ void *cxn_handle(void *arg) {
 
     // advance using current offset from header
     data_offset += dfc_hdr.offset;
-    pthread_mutex_unlock(&f_bufs[n_fbufs]->mutex);
 
     // async file write
+    fprintf(stderr, "[%s] writing to fd=%d when sfd=%d\n", __func__, f_bufs[n_fbufs]->fd, sk_buf->sockfd);
     if (pthread_create(&write_tids[cur_write_tid],
                        &write_tid_attrs[cur_write_tid], async_dfs_write,
                        &f_bufs[n_fbufs]) < 0) {
@@ -179,6 +185,7 @@ void *cxn_handle(void *arg) {
     }
   }
 
+  // destroy thread resources
   for (size_t i = 0; i < SZ_THREAD_POOL; ++i) {
     if (ran_threads[i]) {
       pthread_join(write_tids[i], NULL);
@@ -186,45 +193,40 @@ void *cxn_handle(void *arg) {
     pthread_attr_destroy(&write_tid_attrs[i]);
   }
 
+  // destroy FileBuffers
   for (size_t i = 0; i < n_fbufs; ++i) {
     if (close(f_bufs[i]->fd) == -1) {
-      perror("close");
-
+      fprintf(stderr, "[%s] close(fd=%d): %s\n", __func__, f_bufs[i]->fd, strerror(errno));
       exit(EXIT_FAILURE);
     }
 
-    pthread_mutex_destroy(&f_bufs[i]->mutex);
+    fprintf(stderr, "[%s] close(fd=%d) success\n", __func__, f_bufs[i]->fd);
+    if (f_bufs[i]->data != NULL) {
+      free(f_bufs[i]->data);
+    }
+
     if (f_bufs[i] != NULL) {
       free(f_bufs[i]);
     }
   }
+
   if (f_bufs != NULL) {
     free(f_bufs);
   }
 
-  pthread_mutex_destroy(&sk_buf->mutex);
   if (sk_buf->data != NULL) {
     free(sk_buf->data);
-  }
-
-  if (close(sk_buf->sockfd) == -1) {
-    perror("close");
-    exit(EXIT_FAILURE);
   }
 
   if (sk_buf != NULL) {
     free(sk_buf);
   }
 
-  return NULL;
-}
+  if (dfs_handle != NULL) {
+    free(dfs_handle);
+  }
 
-void print_header(DFCHeader *dfc_hdr) {
-  fputs("DFCHeader {\n", stderr);
-  fprintf(stderr, "  cmd: %s\n", dfc_hdr->cmd);
-  fprintf(stderr, "  filename: %s\n", dfc_hdr->fname);
-  fprintf(stderr, "  offset: %zu\n", dfc_hdr->offset);
-  fputs("}\n", stderr);
+  return NULL;
 }
 
 void print_fbuf(FileBuffer *f_buf) {
