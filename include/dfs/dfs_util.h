@@ -10,4 +10,6 @@ char *realloc_buf(char *, size_t);
 size_t strip_hdr(char *, DFCHeader *);
 size_t strnins(char *, const char *, size_t);
 
+void print_header(DFCHeader *);
+
 #endif  // DFS_UTIL_H_
