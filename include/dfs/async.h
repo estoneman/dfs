@@ -5,7 +5,6 @@ void *async_dfs_write(void *);
 void *async_dfs_recv(void *);
 void *cxn_handle(void *);
 
-void print_header(DFCHeader *);
 void print_fbuf(FileBuffer *);
 
 #endif  // ASYNC_H_
