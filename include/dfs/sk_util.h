@@ -9,6 +9,7 @@
 
 char *alloc_buf(size_t);
 char *dfs_recv(int, ssize_t *);
+char *dfs_recv_hdr(int, ssize_t *);
 ssize_t dfs_send(int, char *, size_t);
 void *get_inetaddr(struct sockaddr *);
 void get_ipstr(char *ipstr, struct sockaddr *addr);

@@ -6,6 +6,7 @@
 char *alloc_buf(size_t);
 int chk_alloc_err(void *, const char *, const char *, int);
 size_t fill_header(DFCHeader *, char *);
+char *read_file(const char *, size_t *);
 char *realloc_buf(char *, size_t);
 size_t strip_hdr(char *, DFCHeader *);
 size_t strnins(char *, const char *, size_t);

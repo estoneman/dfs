@@ -11,6 +11,27 @@
 #include "dfs/dfs_util.h"
 #include "dfs/sk_util.h"
 
+char *dfs_recv_hdr(int sockfd, ssize_t *nb_recv) {
+  char *recv_buf;
+
+  if ((recv_buf = alloc_buf(sizeof(DFCHeader))) == NULL) {
+    fprintf(stderr, "failed to allocate receive buffer (%s:%d)", __func__,
+            __LINE__ - 1);
+
+    return NULL;
+  }
+
+  set_timeout(sockfd, RCVTIMEO_SEC, RCVTIMEO_USEC);
+
+  if ((*nb_recv = recv(sockfd, recv_buf, sizeof(DFCHeader), 0)) == -1) {
+    perror("recv");
+    free(recv_buf);
+    return NULL;
+  }
+
+  return recv_buf;
+}
+
 char *dfs_recv(int sockfd, ssize_t *nb_recv) {
   char *recv_buf;
   size_t total_nb_recv, num_reallocs, bytes_alloced, realloc_sz;
@@ -48,8 +69,6 @@ char *dfs_recv(int sockfd, ssize_t *nb_recv) {
   *nb_recv = total_nb_recv;
 
   if (total_nb_recv == 0) {  // timeout
-    // perror("recv");
-    fprintf(stderr, "received 0 bytes: %s\n", strerror(errno));
     free(recv_buf);
 
     return NULL;
@@ -149,10 +168,6 @@ void set_timeout(int sockfd, long tv_sec, long tv_usec) {
       0) {
     fprintf(stderr, "[%s] setsockopt(sfd=%d) error: %s\n", __func__,
             sockfd, strerror(errno));
-
-    if (close(sockfd) == -1) {
-      fprintf(stderr, "[%s] close(sfd=%d) error: %s\n", __func__, sockfd, strerror(errno));
-    }
 
     exit(EXIT_FAILURE);
   }

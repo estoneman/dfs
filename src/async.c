@@ -1,3 +1,4 @@
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <libgen.h>
@@ -6,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "dfs/types.h"
@@ -13,228 +15,217 @@
 #include "dfs/sk_util.h"
 #include "dfs/async.h"
 
-#define SZ_THREAD_POOL 10
-#define INIT_NBUFS SZ_THREAD_POOL
+#define MAX_FILES 100 
+#define MAX_ENTRY 256
 
 void *async_dfs_recv(void *arg) {
-  SocketBuffer *sk_buf = *(SocketBuffer **)arg;
+  SocketBuffer *sk_buf = (SocketBuffer *)arg;
 
   if ((sk_buf->data = dfs_recv(sk_buf->sockfd, &(sk_buf->len_data))) == NULL) {
-    return NULL;
+    perror("recv");
+    exit(EXIT_FAILURE);
+  }
+
+  return NULL;
+}
+
+void *async_dfs_send(void *arg) {
+  SocketBuffer *sk_buf = (SocketBuffer *)arg;
+  ssize_t bytes_sent;
+
+  if ((bytes_sent = dfs_send(sk_buf->sockfd, sk_buf->data,
+                             sk_buf->len_data)) != sk_buf->len_data) {
+    fprintf(stderr, "[ERROR] incomplete send\n");
   }
 
 #ifdef DEBUG
-  fprintf(stderr, "[%s] received %zd bytes over socket %d\n", __func__, sk_buf->len_data, sk_buf->sockfd);
+  fprintf(stderr, "[%s] sent %zd bytes\n", __func__, bytes_sent);
   fflush(stderr);
 #endif
 
   return NULL;
 }
 
-void *async_dfs_write(void *arg) {
-  FileBuffer *f_buf = *(FileBuffer **)arg;
-  ssize_t bytes_written;
-
-  if ((bytes_written = write(f_buf->fd, f_buf->data, f_buf->len_data)) !=
-      f_buf->len_data) {
-    if (errno == EFAULT) {
-      fprintf(stderr, "[ERROR] incomplete/failed write: %s\n", strerror(errno));
-    } else {
-      perror("write");
-    }
-
-    fprintf(stderr, "[%s] close(fd=%d) success\n", __func__, f_buf->fd);
-  }
-
-#ifdef DEBUG
-  fprintf(stderr, "[%s] wrote %zd bytes (fd=%d)\n", __func__, bytes_written,
-          f_buf->fd);
-#endif
-
-  return NULL;
-}
-
-void *cxn_handle(void *arg) {
-  DFSHandle *dfs_handle = *(DFSHandle **)arg;
-  SocketBuffer *sk_buf;
+void cxn_handle(int connfd, char *dfs_dir) {
+  SocketBuffer hdr_sk_buf;
+  SocketBuffer data_sk_buf;
+  FileBuffer f_buf;
+  GetOperation get_op;
   DFCHeader dfc_hdr;
-  FileBuffer **f_bufs;
-
-  pthread_t recv_tid, write_tids[SZ_THREAD_POOL];
-  pthread_attr_t write_tid_attrs[SZ_THREAD_POOL];
-
-  size_t data_offset, cur_write_tid, ran_threads[SZ_THREAD_POOL];
-  size_t n_fbufs, total_fbufs;
 
   char fname[PATH_MAX + 1];
-  char dfs_dir[PATH_MAX + 1];
 
-  int detach_state;
-
-  if ((sk_buf = malloc(sizeof(SocketBuffer))) == NULL) {
-    fprintf(stderr, "[FATAL] out of memory\n");
+  hdr_sk_buf.sockfd = connfd;
+  if ((hdr_sk_buf.data = dfs_recv_hdr(connfd, &(hdr_sk_buf.len_data))) == NULL) {
+    perror("recv");
     exit(EXIT_FAILURE);
   }
 
-  sk_buf->sockfd = dfs_handle->sockfd;
-  fprintf(stderr, "[%s] SELECTED SOCKFD = %d\n", __func__, sk_buf->sockfd);
-  strncpy(dfs_dir, dfs_handle->dfs_dir, PATH_MAX);
+  fprintf(stderr, "received %zd bytes over sfd=%d\n", hdr_sk_buf.len_data, connfd);
 
-  if (pthread_create(&recv_tid, NULL, async_dfs_recv, &sk_buf) < 0) {
-    fprintf(stderr, "[ERROR] could not create thread\n");
-    exit(EXIT_FAILURE);
-  }
+  // extract header
+  memcpy(&dfc_hdr, hdr_sk_buf.data, hdr_sk_buf.len_data);
+  fprintf(stderr, "successfully parsed %zu bytes from data\n", hdr_sk_buf.len_data);
+  print_header(&dfc_hdr);
 
-  for (size_t i = 0; i < SZ_THREAD_POOL; ++i) {
-    pthread_attr_init(&write_tid_attrs[i]);
-    pthread_attr_setdetachstate(&write_tid_attrs[i], PTHREAD_CREATE_JOINABLE);
-  }
+  strncpy(fname, basename(dfc_hdr.fname), PATH_MAX);
+  strnins(fname, dfs_dir, PATH_MAX);
 
-  if ((f_bufs = malloc(sizeof(FileBuffer *) * INIT_NBUFS)) == NULL) {
-    fprintf(stderr, "[FATAL] out of memory\n");
-    exit(EXIT_FAILURE);
-  }
+  // decide if put, get, or list
+  if (strncmp(dfc_hdr.cmd, "put", sizeof(dfc_hdr.cmd)) == 0) {  // put command
+    // receive file data
+    if ((data_sk_buf.data = dfs_recv(connfd, &(data_sk_buf.len_data))) == NULL) {
+      exit(EXIT_FAILURE);
+    }
 
-  cur_write_tid = 0;
-  data_offset = 0;
-  n_fbufs = 0;
-  total_fbufs = INIT_NBUFS;
+    f_buf.len_data = dfc_hdr.file_offset + sizeof(size_t);
 
-  pthread_join(recv_tid, NULL);
-
-  // close SocketBuffer
-  if (close(sk_buf->sockfd) == -1) {
-    fprintf(stderr, "[%s] close(sfd=%d): %s\n", __func__, sk_buf->sockfd, strerror(errno));
-    exit(EXIT_FAILURE);
-  }
-
-  fprintf(stderr, "[%s] close(sfd=%d) success\n", __func__, sk_buf->sockfd);
-
-
-  while (data_offset < (size_t)sk_buf->len_data) {
-    // extract header
-    data_offset += strip_hdr(sk_buf->data + data_offset, &dfc_hdr);
-
-    if ((f_bufs[n_fbufs] = malloc(sizeof(FileBuffer))) == NULL) {
+    if ((f_buf.data = alloc_buf(f_buf.len_data)) == NULL) {
       fprintf(stderr, "[FATAL] out of memory\n");
       exit(EXIT_FAILURE);
     }
 
-    strncpy(fname, basename(dfc_hdr.fname), PATH_MAX);
-    strnins(fname, dfs_dir, PATH_MAX);
+    strncpy(f_buf.fname, fname, sizeof(f_buf.fname));
+    memcpy(f_buf.data, &dfc_hdr.chunk_offset, sizeof(size_t));
+    memcpy(f_buf.data + sizeof(size_t), data_sk_buf.data, f_buf.len_data);
 
-    // update f_buf
-    f_bufs[n_fbufs]->fname = fname;
+    put_handle(&f_buf);
+  } else if (strncmp(dfc_hdr.cmd, "get", sizeof(dfc_hdr.cmd)) == 0) {  // get command
+    strncpy(f_buf.fname, fname, sizeof(f_buf.fname));
+    f_buf.len_data = 0;
 
-    // f_bufs[n_fbufs]->data =
-    //     sk_buf->data + data_offset;  // include local offset in file data
-    if ((f_bufs[n_fbufs]->data = alloc_buf(dfc_hdr.offset)) == NULL) {
+    get_op.sockfd = connfd;
+    get_op.f_buf = &f_buf;
+  
+    get_handle(&get_op);
+  } else if (strncmp(dfc_hdr.cmd, "list", sizeof(dfc_hdr.cmd)) == 0) {  // list command
+    DIR *dir;
+    struct dirent *entry;
+    char *snd_buf;
+    size_t entry_len, len_snd_buf;
+    ssize_t bytes_sent;
+
+    if ((dir = opendir(dfs_dir)) == NULL) {
+      fprintf(stderr, "[%s:%d] failed to open %s: %s\n", __func__, getpid(), dfs_dir, strerror(errno));
+    }
+
+    if ((snd_buf = alloc_buf(MAX_FILES * MAX_ENTRY)) == NULL) {
       fprintf(stderr, "[FATAL] out of memory\n");
       exit(EXIT_FAILURE);
     }
 
-    memcpy(f_bufs[n_fbufs]->data, sk_buf->data + data_offset, dfc_hdr.offset);
-    f_bufs[n_fbufs]->len_data = dfc_hdr.offset;
+    len_snd_buf = 0;
+    while ((entry = readdir(dir)) != NULL) {
+      if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+        continue;
+      }
 
-    if ((f_bufs[n_fbufs]->fd =
-             open(f_bufs[n_fbufs]->fname, O_WRONLY | O_CREAT | O_TRUNC,
-                  S_IRUSR | S_IWUSR)) == -1) {
-      perror("open");
-
-      return NULL;
+      entry_len = strlen(entry->d_name) + 1;
+      strncpy(snd_buf + len_snd_buf, entry->d_name, entry_len);
+      printf("%s\n", snd_buf + len_snd_buf);
+      len_snd_buf += entry_len;
     }
 
-    // advance using current offset from header
-    data_offset += dfc_hdr.offset;
-
-    // async file write
-    fprintf(stderr, "[%s] writing to fd=%d when sfd=%d\n", __func__, f_bufs[n_fbufs]->fd, sk_buf->sockfd);
-    if (pthread_create(&write_tids[cur_write_tid],
-                       &write_tid_attrs[cur_write_tid], async_dfs_write,
-                       &f_bufs[n_fbufs]) < 0) {
-      fprintf(stderr, "[ERROR] could not create thread\n");
+    // ssize_t dfs_send(int sockfd, char *send_buf, size_t len_send_buf) {
+    if ((bytes_sent = dfs_send(connfd, snd_buf, len_snd_buf)) != (ssize_t)len_snd_buf) {
+      fprintf(stderr, "[%s:%d] failed to send %s: %s\n", __func__, getpid(), dfs_dir, strerror(errno));
       exit(EXIT_FAILURE);
     }
 
-    n_fbufs++;
-    ran_threads[(cur_write_tid++) % SZ_THREAD_POOL] = 1;
-
-    if (n_fbufs >= total_fbufs) {
-      total_fbufs *= 2;
-
-      if ((f_bufs = realloc(f_bufs, total_fbufs * sizeof(FileBuffer *))) ==
-          NULL) {
-        fprintf(stderr, "[FATAL] out of memory\n");
-        free(f_bufs);
-        exit(EXIT_FAILURE);
-      }
-    }
-
-    // if surpassed thread pool depth, check for joinable threads
-    if (cur_write_tid >= SZ_THREAD_POOL) {
-      for (size_t i = 0; i < SZ_THREAD_POOL; ++i) {
-        pthread_attr_getdetachstate(&write_tid_attrs[i], &detach_state);
-        if (detach_state == PTHREAD_CREATE_JOINABLE) {
-          fprintf(stderr, "[INFO] joining completed thread %zu\n", i);
-          pthread_join(write_tids[i], NULL);
-          cur_write_tid = i;
-          ran_threads[i] = 0;
-          break;  // only need one back
-        }
-      }
-    }
-  }
-
-  // destroy thread resources
-  for (size_t i = 0; i < SZ_THREAD_POOL; ++i) {
-    if (ran_threads[i]) {
-      pthread_join(write_tids[i], NULL);
-    }
-    pthread_attr_destroy(&write_tid_attrs[i]);
-  }
-
-  // destroy FileBuffers
-  for (size_t i = 0; i < n_fbufs; ++i) {
-    if (close(f_bufs[i]->fd) == -1) {
-      fprintf(stderr, "[%s] close(fd=%d): %s\n", __func__, f_bufs[i]->fd, strerror(errno));
+    if (closedir(dir) == -1) {
+      fprintf(stderr, "[%s:%d] failed to close %s: %s\n", __func__, getpid(), dfs_dir, strerror(errno));
       exit(EXIT_FAILURE);
     }
 
-    fprintf(stderr, "[%s] close(fd=%d) success\n", __func__, f_bufs[i]->fd);
-    if (f_bufs[i]->data != NULL) {
-      free(f_bufs[i]->data);
-    }
-
-    if (f_bufs[i] != NULL) {
-      free(f_bufs[i]);
-    }
+    free(snd_buf);
+  } else {  // invalid command
+    fputs("invalid response handler: unimplemented\n", stderr);
+    exit(EXIT_FAILURE);
   }
 
-  if (f_bufs != NULL) {
-    free(f_bufs);
+  free(hdr_sk_buf.data);
+  free(data_sk_buf.data);
+  free(f_buf.data);
+
+  exit(EXIT_SUCCESS);
+}
+
+// void *get_handle(void *arg) {
+void get_handle(GetOperation *get_op) {
+  FileBuffer *f_buf = get_op->f_buf;
+  int fd;
+  ssize_t bytes_read, bytes_sent;
+  struct stat st;
+
+  // read from file
+  if ((fd = open(f_buf->fname, O_RDONLY)) == -1) {
+    fprintf(stderr, "[%s:%d] failed to open %s: %s\n", __func__, getpid(),
+            f_buf->fname, strerror(errno));
+    exit(EXIT_FAILURE);
   }
 
-  if (sk_buf->data != NULL) {
-    free(sk_buf->data);
+  if (fstat(fd, &st) == -1) {
+    fprintf(stderr, "[%s:%d] failed to stat %s: %s\n", __func__, getpid(), f_buf->fname, strerror(errno));
+    exit(EXIT_FAILURE);
   }
 
-  if (sk_buf != NULL) {
-    free(sk_buf);
+  f_buf->len_data = st.st_size;
+
+  if ((f_buf->data = alloc_buf(f_buf->len_data)) == NULL) {
+    fprintf(stderr, "[FATAL] out of memory\n");
+    exit(EXIT_FAILURE);
   }
 
-  if (dfs_handle != NULL) {
-    free(dfs_handle);
+  if ((bytes_read = read(fd, f_buf->data, f_buf->len_data)) != (ssize_t)f_buf->len_data) {
+    fprintf(stderr, "[%s:%d] failed to read fd=%d: %s\n", __func__, getpid(), fd, strerror(errno));
+    exit(EXIT_FAILURE);
   }
 
-  return NULL;
+  fprintf(stderr, "[%s:%d] read %zd bytes from fd=%d\n", __func__, getpid(), bytes_read, fd);
+
+  // send file contents
+  if ((bytes_sent = write(get_op->sockfd, f_buf->data, f_buf->len_data)) == -1) {
+    fprintf(stderr, "[%s:%d] failed to send over sfd=%d: %s\n", __func__, getpid(), get_op->sockfd, strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+
+  fprintf(stderr, "[%s:%d] sent %zd bytes over sfd=%d\n", __func__, getpid(), bytes_sent, get_op->sockfd);
+
+  if (close(fd) == -1) {
+    fprintf(stderr, "[%s:%d] failed to close fd=%d: %s\n", __func__, getpid(), fd, strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+}
+
+void put_handle(FileBuffer *f_buf) {
+  int fd;
+  ssize_t bytes_written;
+
+  if ((fd = open(f_buf->fname, O_CREAT | O_TRUNC | O_WRONLY, S_IWUSR | S_IRUSR)) == -1) {
+    fprintf(stderr, "[%s:%d] failed to open %s: %s\n", __func__, getpid(),
+            f_buf->fname, strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+
+  if ((bytes_written = write(fd, f_buf->data, f_buf->len_data)) == -1) {
+    fprintf(stderr, "[%s:%d] failed to completely write to %s: %s\n", __func__, getpid(),
+            f_buf->fname, strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+
+  fprintf(stderr, "[%s:%d] wrote %zd bytes to %s\n", __func__, getpid(), bytes_written, f_buf->fname);
+
+  if (close(fd) == -1) {
+    fprintf(stderr, "[%s:%d] failed to close fd=%d: %s\n", __func__, getpid(),
+            fd, strerror(errno));
+    exit(EXIT_FAILURE);
+  }
 }
 
 void print_fbuf(FileBuffer *f_buf) {
   fputs("FileBuffer {\n", stderr);
   fprintf(stderr, "  fname: %s\n", f_buf->fname);
-  fprintf(stderr, "  fd: %d\n", f_buf->fd);
   fprintf(stderr, "  data: <omitted>\n");
   fprintf(stderr, "  len_data: %zu\n", f_buf->len_data);
-  fprintf(stderr, "  mutex: <omitted>\n");
   fputs("}\n", stderr);
 }

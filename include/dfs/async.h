@@ -1,9 +1,9 @@
 #ifndef ASYNC_H_
 #define ASYNC_H_
 
-void *async_dfs_write(void *);
-void *async_dfs_recv(void *);
-void *cxn_handle(void *);
+void cxn_handle(int, char *);
+void get_handle(GetOperation *);
+void put_handle(FileBuffer *);
 
 void print_fbuf(FileBuffer *);
 
